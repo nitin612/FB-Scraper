@@ -15,7 +15,8 @@ from listing_filters import parse_card, detect_model, local_filter, condition_fr
 from gemini_analyzer import triage_cards, analyze_deal, gemini_stats
 from market_comps import get_ebay_sold_comp, get_local_comp, market_value, base_slug, ebay_status
 from outreach_worker import send_human_message, UNAVAILABLE_PHRASES
-from deal_pipeline import (supabase, check_schema, load_bot_config, load_seen, lookup_existing, save_listing, update_listing,
+from deal_pipeline import (supabase, check_schema, load_bot_config, load_local_config, CONFIG_CACHE_FILE,
+                           load_seen, lookup_existing, save_listing, update_listing,
                            evaluate_intraday_pricing, messages_sent_today, next_pending_outreach, seller_already_contacted,
                            download_photos, send_telegram_alert, send_desktop_alert, esc, in_active_hours, local_now, utc_now_iso,
                            ago_to_iso, get_listing, count_listings, top_deals_since, local_midnight_utc_iso, APPROVED_PREFIX)
@@ -34,12 +35,51 @@ class Shared:
 
     def __init__(self):
         self.config: dict | None = None
+        self.config_version: int = 0
         self.seen: dict[str, tuple[float, str]] = {}
         self.fingerprints: dict[str, str] = {}
         self.claimed: set[str] = set()          # queued deals an account is sending right now
         self.approved: set[str] = set()         # deals approved from Telegram, waiting for a free account
         self.account_status: dict[str, str] = {}
         self._keyword_index = 0
+
+    def update_config(self, new_cfg: dict | None) -> bool:
+        if not new_cfg:
+            return False
+        old_cfg = self.config or {}
+
+        old_kw = [k.strip().lower() for k in old_cfg.get("keywords", "").split(",") if k.strip()]
+        new_kw = [k.strip().lower() for k in new_cfg.get("keywords", "").split(",") if k.strip()]
+
+        kw_changed = old_kw != new_kw
+        city_changed = str(old_cfg.get("target_city", "")).strip().lower() != str(new_cfg.get("target_city", "")).strip().lower()
+        price_changed = (old_cfg.get("min_price"), old_cfg.get("max_price")) != (new_cfg.get("min_price"), new_cfg.get("max_price"))
+        active_changed = old_cfg.get("is_active") != new_cfg.get("is_active")
+        auto_changed = old_cfg.get("auto_message_enabled") != new_cfg.get("auto_message_enabled")
+
+        self.config = new_cfg
+
+        if kw_changed or city_changed or price_changed or active_changed or auto_changed:
+            self.config_version += 1
+            changes = []
+            raw_new_kw = [k.strip() for k in new_cfg.get("keywords", "").split(",") if k.strip()]
+            if kw_changed:
+                self._keyword_index = 0   # restart rotation immediately with the first new keyword
+                changes.append(f"Keywords -> {raw_new_kw}")
+            if city_changed:
+                changes.append(f"City -> {new_cfg.get('target_city')}")
+            if price_changed:
+                changes.append(f"Price -> ${new_cfg.get('min_price', 0):,} - ${new_cfg.get('max_price', 0):,}")
+            if active_changed:
+                changes.append(f"Active -> {new_cfg.get('is_active')}")
+            if auto_changed:
+                changes.append(f"Auto-message -> {new_cfg.get('auto_message_enabled')}")
+
+            print(f"\n🔄 Live configuration updated: {', '.join(changes)}")
+            if kw_changed and raw_new_kw:
+                print(f"   ⚡ Scraper will immediately switch to: '{raw_new_kw[0]}'")
+            return True
+        return False
 
     def next_keyword(self) -> str | None:
         keywords = [k.strip() for k in (self.config or {}).get("keywords", "").split(",") if k.strip()]
@@ -54,6 +94,7 @@ class AccountWorker:
     def __init__(self, account: dict, shared: Shared, playwright, start_delay: float):
         self.account, self.id, self.shared, self.pw = account, account["id"], shared, playwright
         self.start_delay = start_delay
+        self.last_config_version = shared.config_version
         self.context = self.page = None
         self.problem: str | None = None
         self.search_times: deque = deque()
@@ -382,10 +423,13 @@ class AccountWorker:
             self.shared.approved.discard(item["id"])
 
     async def rest(self, seconds: float):
-        """Pause between searches, but wake up to send a message the user just approved in Telegram."""
+        """Pause between searches, but wake up immediately if Telegram approved a deal or settings changed in dashboard."""
         end = time.time() + seconds
         while (left := end - time.time()) > 0:
-            await asyncio.sleep(min(5.0, left))
+            if self.last_config_version < self.shared.config_version:
+                self.log("⚡ Settings updated in dashboard - waking up immediately for next search!")
+                break
+            await asyncio.sleep(min(1.0, left))
             if self.shared.approved and not self.problem and in_active_hours() and self.can_message_now():
                 await self.maybe_send_outreach()
 
@@ -400,22 +444,27 @@ class AccountWorker:
             while not self.problem:
                 cfg = self.shared.config
                 if not cfg or not cfg.get("is_active"):
-                    await pause(20, 40)
+                    await self.rest(4.0)
                     continue
                 if not in_active_hours():
                     if not idle_logged:
                         self.log(f"😴 Outside active hours ({settings.ACTIVE_START_HOUR}:00-{settings.ACTIVE_END_HOUR}:00) - resting.")
                         idle_logged = True
-                    await pause(300, 600)
+                    await self.rest(120.0)
                     continue
                 idle_logged = False
                 wait = self._within_hourly_cap(self.search_times, settings.MAX_SEARCHES_PER_HOUR)
                 if wait:
                     self.log(f"🛡️ Hourly search cap reached - resting {wait / 60:.0f} min.")
                     await self.rest(wait)
+
+                if self.last_config_version < self.shared.config_version:
+                    self.last_config_version = self.shared.config_version
+                    searches = 0
+
                 keyword = self.shared.next_keyword()
                 if not keyword:
-                    await pause(30, 60)
+                    await self.rest(10.0)
                     continue
                 try:
                     await self.scan(keyword)
@@ -547,12 +596,32 @@ async def daily_summary(shared: Shared):
 
 
 async def refresh_config(shared: Shared):
+    """Watches local file cache (sub-second response) and polls Supabase (every 5s) for live config updates."""
+    last_mtime = 0.0
+    counter = 0
     while True:
-        await asyncio.sleep(60)
         try:
-            shared.config = load_bot_config() or shared.config
+            if os.path.exists(CONFIG_CACHE_FILE):
+                mtime = os.path.getmtime(CONFIG_CACHE_FILE)
+                if mtime > last_mtime:
+                    last_mtime = mtime
+                    local_cfg = load_local_config()
+                    if local_cfg:
+                        shared.update_config(local_cfg)
         except Exception:
             pass
+
+        counter += 1
+        if counter >= 5:
+            counter = 0
+            try:
+                remote_cfg = load_bot_config()
+                if remote_cfg:
+                    shared.update_config(remote_cfg)
+            except Exception:
+                pass
+
+        await asyncio.sleep(1.0)
 
 
 async def report_usage():
@@ -570,6 +639,7 @@ async def main() -> int:
         return 0
     shared = Shared()
     shared.config = load_bot_config()
+    shared.config_version = 1
     shared.seen, shared.fingerprints = load_seen()
     print(f"   {len(shared.seen)} recent listings already known - they won't be analyzed again.")
     if settings.OUTREACH_DRY_RUN:

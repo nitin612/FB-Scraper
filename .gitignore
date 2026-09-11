@@ -22,6 +22,7 @@ fb_session*/
 *.session
 storage_state.json
 account_state.json
+.runtime_config.json*
 
 # Playwright artifacts & logs
 test-results/

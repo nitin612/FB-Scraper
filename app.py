@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import logging
 import settings
 from fb_browser import load_account_state
+from deal_pipeline import save_bot_config, load_bot_config
 
 logging.getLogger("google.genai").setLevel(logging.ERROR)
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
@@ -46,8 +47,7 @@ st.set_page_config(page_title="Deal Hunter CRM", page_icon="📱", layout="wide"
 st.title("📱 Arbitrage CRM & Live Scanner")
 st_autorefresh(interval=30000, limit=None, key="data_refresh")
 
-settings_req = supabase.table("bot_settings").select("*").eq("id", 1).execute()
-bot_config = settings_req.data[0] if settings_req.data else None
+bot_config = load_bot_config()
 
 @st.cache_data(show_spinner=False)
 def inspect_hardware_with_ai(img_url: str):
@@ -223,9 +223,11 @@ with tab3:
         
         c_on, c_off = st.columns(2)
         if c_on.button("▶️ Start System", type="primary", disabled=state, width="stretch"):
-            supabase.table("bot_settings").update({"is_active": True}).eq("id", 1).execute(); st.rerun()
+            save_bot_config({"is_active": True})
+            st.rerun()
         if c_off.button("⏸️ Pause System", disabled=not state, width="stretch"):
-            supabase.table("bot_settings").update({"is_active": False}).eq("id", 1).execute(); st.rerun()
+            save_bot_config({"is_active": False})
+            st.rerun()
             
         st.markdown("---")
         st.markdown("#### 📊 Today")
@@ -248,13 +250,16 @@ with tab3:
         st.markdown("---")
         auto_dm = st.toggle(f"Auto-message Elite/Prime deals (each account max {settings.MAX_MESSAGES_PER_DAY}/day)", value=bot_config.get('auto_message_enabled', False))
         if auto_dm != bot_config.get('auto_message_enabled'):
-            supabase.table("bot_settings").update({"auto_message_enabled": auto_dm}).eq("id", 1).execute(); st.rerun()
+            save_bot_config({"auto_message_enabled": auto_dm})
+            st.rerun()
 
     with st.form("settings_form"):
         city = st.text_input("Target City", value=bot_config['target_city'] if bot_config else "toronto")
         kw = st.text_input("Keywords", value=bot_config['keywords'] if bot_config else "iPhone")
         min_p = st.number_input("Min $", value=bot_config['min_price'] if bot_config else 50)
         max_p = st.number_input("Max $", value=bot_config['max_price'] if bot_config else 2500)
-        if st.form_submit_button("Deploy Changes"):
-            supabase.table("bot_settings").update({"target_city": city, "keywords": kw, "min_price": min_p, "max_price": max_p}).eq("id", 1).execute()
-            st.success("Changes deployed to database.")
+        if st.form_submit_button("Deploy Changes", type="primary"):
+            save_bot_config({"target_city": city, "keywords": kw, "min_price": min_p, "max_price": max_p})
+            st.success("✅ Changes deployed! Scraper updated live without restarting.")
+            time.sleep(0.5)
+            st.rerun()

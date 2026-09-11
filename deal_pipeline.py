@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from plyer import notification
+import sys
+import subprocess
+import json
 import settings
 from telegram_bot import send_telegram_alert, esc   # re-exported for continuous_scraper
 
@@ -60,14 +62,88 @@ def in_active_hours() -> bool:
 
 def send_desktop_alert(title: str, message: str):
     try:
-        notification.notify(title=title, message=message, app_name="Deal Hunter", timeout=10)
+        if sys.platform == "darwin":
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e", "on run argv",
+                    "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
+                    "-e", "end run",
+                    str(title),
+                    str(message),
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        elif sys.platform == "win32":
+            try:
+                from plyer import notification
+                notification.notify(title=title, message=message, app_name="Deal Hunter", timeout=10)
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(["notify-send", str(title), str(message)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
     except Exception:
         pass
 
 
+CONFIG_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".runtime_config.json")
+
+
+def save_local_config(cfg: dict):
+    """Atomically writes config to local runtime cache so the scraper detects changes in real-time."""
+    try:
+        tmp_file = CONFIG_CACHE_FILE + ".tmp"
+        with open(tmp_file, "w") as f:
+            json.dump(cfg, f, indent=2)
+        os.replace(tmp_file, CONFIG_CACHE_FILE)
+    except Exception:
+        pass
+
+
+def load_local_config() -> dict | None:
+    """Loads config from local runtime cache if available."""
+    try:
+        if os.path.exists(CONFIG_CACHE_FILE):
+            with open(CONFIG_CACHE_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+
+def save_bot_config(updates: dict) -> dict | None:
+    """Updates Supabase and writes immediately to local cache file for instant reflection."""
+    updated = None
+    try:
+        res = supabase.table("bot_settings").update(updates).eq("id", 1).execute()
+        if res.data:
+            updated = res.data[0]
+            save_local_config(updated)
+            return updated
+    except Exception as e:
+        print(f"⚠️ Error saving bot config to Supabase: {e}")
+    # Fallback to updating local cache
+    current = load_local_config() or {}
+    current.update(updates)
+    save_local_config(current)
+    return current
+
+
 def load_bot_config() -> dict | None:
-    res = supabase.table("bot_settings").select("*").eq("id", 1).execute()
-    return res.data[0] if res.data else None
+    """Fetches config from Supabase and syncs local cache, falling back to local cache if offline."""
+    try:
+        res = supabase.table("bot_settings").select("*").eq("id", 1).execute()
+        if res.data:
+            save_local_config(res.data[0])
+            return res.data[0]
+    except Exception:
+        pass
+    return load_local_config()
 
 
 def load_seen() -> tuple[dict[str, tuple[float, str]], dict[str, str]]:
