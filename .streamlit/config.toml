@@ -1,0 +1,53 @@
+# Production Linear & Raycast-inspired Dark Theme
+[theme]
+base = "dark"
+primaryColor = "#6366F1"
+backgroundColor = "#0D0E12"
+secondaryBackgroundColor = "#16181F"
+codeBackgroundColor = "#1B1D26"
+textColor = "#F3F4F6"
+linkColor = "#818CF8"
+borderColor = "#272A34"
+codeTextColor = "#E2E8F0"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "6px"
+buttonRadius = "6px"
+
+font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+baseFontWeight = 400
+codeFontSize = "13px"
+headingFontSizes = ["24px", "19px", "16px", "14px", "13px", "12px"]
+headingFontWeights = [700, 600, 600, 600, 500, 500]
+linkUnderline = false
+
+# Semantic colors
+greenColor = "#10B981"
+redColor = "#EF4444"
+yellowColor = "#F59E0B"
+orangeColor = "#F97316"
+blueColor = "#6366F1"
+violetColor = "#8B5CF6"
+grayColor = "#71717A"
+
+chartCategoricalColors = [
+    "#6366F1",
+    "#10B981",
+    "#38BDF8",
+    "#F59E0B",
+    "#EC4899",
+    "#8B5CF6",
+    "#94A3B8"
+]
+
+dataframeBorderColor = "#272A34"
+dataframeHeaderBackgroundColor = "#16181F"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+headless = true
