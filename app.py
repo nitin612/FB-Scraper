@@ -118,49 +118,50 @@ div[data-testid="stElementContainer"]:has(.st-key-data_refresh) {{
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.15rem 0.25rem 0.55rem 0.25rem;
+    padding: 0.35rem 0.25rem 0.75rem 0.25rem;
     border-bottom: 1px solid #272A34;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.65rem;
 }}
 .terminal-title-row {{
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
 }}
 .terminal-title {{
-    font-size: 1.18rem;
+    font-size: 1.55rem;
     font-weight: 700;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.025em;
     color: #F3F4F6;
+    line-height: 1.2;
 }}
 .terminal-badge {{
     background: #1B1D26;
     border: 1px solid #2E3345;
     color: #818CF8;
-    font-size: 0.68rem;
+    font-size: 0.76rem;
     font-weight: 600;
-    padding: 1px 7px;
-    border-radius: 4px;
+    padding: 2px 8px;
+    border-radius: 5px;
     letter-spacing: 0.03em;
 }}
 .terminal-meta {{
-    font-size: 0.74rem;
+    font-size: 0.85rem;
     color: #94A3B8;
-    margin-top: 1px;
+    margin-top: 3px;
 }}
 .terminal-status-container {{
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 2px;
+    gap: 3px;
 }}
 .status-pill {{
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    font-size: 0.72rem;
+    gap: 6px;
+    font-size: 0.78rem;
     font-weight: 600;
-    padding: 3px 9px;
+    padding: 4px 12px;
     border-radius: 9999px;
     letter-spacing: 0.02em;
 }}
@@ -175,8 +176,8 @@ div[data-testid="stElementContainer"]:has(.st-key-data_refresh) {{
     border: 1px solid rgba(239, 68, 68, 0.25);
 }}
 .status-dot {{
-    width: 6px;
-    height: 6px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
 }}
 .status-dot.active {{
@@ -187,7 +188,7 @@ div[data-testid="stElementContainer"]:has(.st-key-data_refresh) {{
     background: #EF4444;
 }}
 .sync-time {{
-    font-size: 0.72rem;
+    font-size: 0.76rem;
     color: #94A3B8;
 }}
 
