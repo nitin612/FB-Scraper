@@ -1,0 +1,13 @@
+playwright
+playwright-stealth
+google-genai
+supabase
+python-dotenv
+requests
+streamlit
+streamlit-autorefresh
+pandas
+pillow
+plyer
+pydantic
+tzdata

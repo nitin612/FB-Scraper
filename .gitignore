@@ -1,0 +1,44 @@
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Session & Authentication storage (Playwright / Facebook)
+fb_session*/
+*.session
+storage_state.json
+account_state.json
+
+# Playwright artifacts & logs
+test-results/
+playwright-report/
+*.log
+
+# IDE & editor configurations
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

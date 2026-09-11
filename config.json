@@ -1,0 +1,11 @@
+{
+  "city": "toronto",
+  "min_price": 100,
+  "max_price": 2000,
+  "search_queries": [
+    "iPhone",
+    "Samsung Galaxy",
+    "Google Pixel"
+  ],
+  "max_items_per_query": 25
+}

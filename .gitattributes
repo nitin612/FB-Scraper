@@ -1,0 +1,3 @@
+# Keep shell scripts LF (macOS/Linux) and batch files CRLF (Windows), regardless of core.autocrlf
+*.sh text eol=lf
+*.bat text eol=crlf
