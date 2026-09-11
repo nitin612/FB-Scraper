@@ -325,9 +325,9 @@ class AccountWorker:
         intraday = evaluate_intraday_pricing(slug, grade, c.price, card["id"])
         cheaper = intraday.get("cheaper_deal") or {}
         cfg = self.shared.config
-        # Prevent auto-messaging if the item is overpriced locally, looks risky, or its value is only an AI guess
+        # Prevent auto-messaging if the item is overpriced locally, looks risky, or has no valuation
         queue = bool(cfg.get("auto_message_enabled")) and tier in ("ELITE_FLIP", "PRIME_FLIP") \
-            and intraday["status"] != "OVERPRICED" and a.scam_risk != "HIGH" and x["source"] not in ("ai_estimate", "none")
+            and intraday["status"] != "OVERPRICED" and a.scam_risk != "HIGH" and x["source"] != "none"
         status = "PENDING_OUTREACH" if queue else "NEW"
         previous = x["price_drop_from"] or c.previous_price
         photo = (details.get("photos") or [card["img"]])[0]
@@ -342,7 +342,7 @@ class AccountWorker:
             "scam_risk": a.scam_risk, "description": details.get("description"), "location": c.location, "fingerprint": x["fp"],
             "filter_reason": None, "found_by": self.id, "seller_id": details.get("seller_id"), "seller_name": details.get("seller_name"),
             "auto_message_text": a.auto_message_text, "created_at": utc_now_iso(), "listed_at": details.get("listed_at"),
-            "outreach_log": "⏳ Queued for Dispatch" if queue else "Skipped (auto-messaging off, overpriced, risky, or value is only an AI estimate)",
+            "outreach_log": "⏳ Queued for Dispatch" if queue else "Skipped (auto-messaging off, overpriced, or high scam risk)",
         })
         self.remember(card["id"], c.price, status, x["fp"])
         stats[tier] += 1
@@ -430,7 +430,8 @@ class AccountWorker:
                 self.log("⚡ Settings updated in dashboard - waking up immediately for next search!")
                 break
             await asyncio.sleep(min(1.0, left))
-            if self.shared.approved and not self.problem and in_active_hours() and self.can_message_now():
+            auto = bool((self.shared.config or {}).get("auto_message_enabled"))
+            if (auto or self.shared.approved) and not self.problem and in_active_hours() and self.can_message_now():
                 await self.maybe_send_outreach()
 
     # ---------- main loop ----------
