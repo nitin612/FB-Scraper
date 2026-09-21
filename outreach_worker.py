@@ -1,15 +1,29 @@
 """Sends the first 'still available?' message from a Facebook account's own browser.
 
-Outreach now runs inside continuous_scraper.py: between searches, each account messages
-queued deals within the daily caps in settings.py. Start the scraper to use it.
+Outreach runs inside continuous_scraper.py: between searches, each account messages
+queued deals within the daily caps in settings.py.
 """
 import random
 import sys
 
-UNAVAILABLE_PHRASES = ("this listing is no longer available", "listing is no longer available", "this item has been sold")
+UNAVAILABLE_PHRASES = (
+    "this listing is no longer available",
+    "listing is no longer available",
+    "this item has been sold",
+    "item is no longer available",
+)
 MESSAGING_BLOCK_PHRASES = (
-    "you can't message", "you can’t message", "message couldn't be sent", "message couldn’t be sent",
-    "you're temporarily blocked", "you’re temporarily blocked", "limit how often you can",
+    "you can't message",
+    "you can’t message",
+    "message couldn't be sent",
+    "message couldn’t be sent",
+    "you're temporarily blocked",
+    "you’re temporarily blocked",
+    "limit how often you can",
+    "action blocked",
+    "you can't buy or sell",
+    "you can’t buy or sell",
+    "restore your access to marketplace",
 )
 
 
@@ -20,13 +34,31 @@ async def _page_text(page) -> str:
         return ""
 
 
+async def _find_first_visible(page, selectors: list[str]):
+    """Returns the first matching locator that is currently visible on the page."""
+    for sel in selectors:
+        try:
+            loc = page.locator(sel)
+            count = await loc.count()
+            for i in range(count):
+                item = loc.nth(i)
+                if await item.is_visible():
+                    return item
+        except Exception:
+            continue
+    return None
+
+
 async def send_human_message(page, listing_url: str, message_text: str) -> tuple[bool, str]:
-    """Returns (sent, reason). reason 'MESSAGING_BLOCKED' means Facebook is limiting this account's messages."""
+    """Navigates to a listing and sends a message to the seller.
+    Returns (sent: bool, reason: str).
+    reason 'MESSAGING_BLOCKED' means Facebook is limiting this account's messages.
+    """
     try:
         await page.goto(listing_url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(random.randint(3500, 5500))
+        await page.wait_for_timeout(random.randint(3500, 5000))
 
-        # Check if listing is unavailable
+        # Check if listing is unavailable / sold
         initial_text = await _page_text(page)
         if any(p in initial_text for p in UNAVAILABLE_PHRASES):
             return False, "Listing no longer available"
@@ -35,124 +67,137 @@ async def send_human_message(page, listing_url: str, message_text: str) -> tuple
         if "you sent a message" in initial_text or "message sent" in initial_text:
             return True, "Already messaged"
 
-        # Possible message button selectors that trigger the message dialog or open sidebar
-        msg_button_selectors = [
-            'div[aria-label="Message"]:not([aria-disabled="true"])',
-            'button:has-text("Message")',
-            'div[role="button"]:has-text("Message")',
-            'div[aria-label="Send message to seller"]',
-            'div[aria-label="Send seller a message"]',
-            'div[aria-label="Contact seller"]',
-            'div[role="button"]:has-text("Contact seller")',
-            'div[role="button"]:has-text("Send message")',
-            'span:has-text("Send message")',
-            'span:has-text("Message")',
-        ]
+        # 0. Check if browser session has authentication cookies
+        from fb_browser import is_account_logged_in
+        if not await is_account_logged_in(page.context):
+            return False, "ACCOUNT_NOT_LOGGED_IN: Browser session is not logged into Facebook. Run 'run.bat setup' to log in."
 
-        # Textbox selectors on FB Marketplace (inline panel, dialog modal, or Messenger dock)
-        textbox_selectors = [
+        # 1. First, check if a message input is ALREADY open (modal or inline panel)
+        modal_box_selectors = [
             'div[role="dialog"] div[contenteditable="true"][role="textbox"]',
+            'div[role="dialog"] div[contenteditable="true"]',
             'div[role="dialog"] textarea',
-            'div[contenteditable="true"][role="textbox"]',
-            'div[contenteditable="true"][aria-label*="Message" i]',
-            'div[contenteditable="true"][aria-label*="seller" i]',
-            'div[contenteditable="true"]',
-            'textarea[aria-label*="Message" i]',
-            'textarea[aria-label*="seller" i]',
-            'textarea[placeholder*="message" i]',
-            'textarea[placeholder*="available" i]',
-            '[aria-label="Message to seller"]',
-            '[aria-label="Send a message to this seller"]',
-            '[aria-label="Send a message to this seller..."]',
-            'div[role="textbox"]',
-            'textarea',
+            'div[role="dialog"] [aria-label*="Message" i]',
+            'div[role="dialog"] [aria-label*="seller" i]',
+        ]
+        inline_box_selectors = [
+            'div[role="main"] textarea[aria-label*="Message" i]',
+            'div[role="main"] textarea[aria-label*="seller" i]',
+            'div[role="main"] div[contenteditable="true"][aria-label*="Message" i]',
+            'div[role="main"] div[contenteditable="true"][aria-label*="seller" i]',
+            'div[role="main"] textarea[placeholder*="message" i]',
+            'div[role="main"] textarea[placeholder*="available" i]',
+            'div[role="main"] [aria-label="Message to seller"]',
+            'div[role="main"] [aria-label="Send a message to this seller"]',
         ]
 
-        # Find visible textbox
-        textbox = None
-        for sel in textbox_selectors:
-            loc = page.locator(sel).locator("visible=true").first
-            if await loc.count() > 0:
-                textbox = loc
-                break
+        textbox = await _find_first_visible(page, modal_box_selectors)
+        if not textbox:
+            textbox = await _find_first_visible(page, inline_box_selectors)
 
-        # If no textbox found directly on page, click primary "Message" button to open modal
-        if textbox is None:
-            for btn_sel in msg_button_selectors:
-                btn = page.locator(btn_sel).locator("visible=true").first
-                if await btn.count() > 0:
-                    await btn.click(delay=random.randint(60, 150))
-                    await page.wait_for_timeout(random.randint(2500, 4000))
-                    break
+        # 2. If no textbox is open, click the primary "Message" or "Contact Seller" button
+        if not textbox:
+            msg_button_selectors = [
+                'div[role="main"] div[aria-label="Message"][role="button"]',
+                'div[role="main"] div[aria-label="Send message to seller"]',
+                'div[role="main"] div[aria-label="Send seller a message"]',
+                'div[role="main"] div[aria-label="Contact seller"]',
+                'div[role="main"] button:has-text("Message")',
+                'div[role="main"] div[role="button"]:has-text("Message")',
+                'div[role="main"] div[role="button"]:has-text("Contact seller")',
+                'div[aria-label="Message"][role="button"]',
+                'div[aria-label="Send message to seller"]',
+                'div[aria-label="Contact seller"]',
+                'button:has-text("Message")',
+                'div[role="button"]:has-text("Message")',
+            ]
+            btn = await _find_first_visible(page, msg_button_selectors)
+            if btn:
+                try:
+                    await btn.scroll_into_view_if_needed(timeout=3000)
+                except Exception:
+                    pass
+                try:
+                    await btn.click(force=True, delay=random.randint(80, 150))
+                except Exception:
+                    await btn.evaluate("el => el.click()")
+                await page.wait_for_timeout(random.randint(2500, 3500))
 
-            # Try locating textbox again after clicking Message button
-            for sel in textbox_selectors:
-                loc = page.locator(sel).locator("visible=true").first
-                if await loc.count() > 0:
-                    textbox = loc
-                    break
+                # Check if Facebook prompted for login
+                dialog = page.locator('div[role="dialog"]').first
+                if await dialog.count() > 0 and await dialog.is_visible():
+                    try:
+                        d_text = (await dialog.inner_text(timeout=2000)).lower()
+                        if "log in to facebook" in d_text or "create new account" in d_text:
+                            return False, "ACCOUNT_NOT_LOGGED_IN: Facebook prompted for login. Run 'run.bat setup' to log into your account."
+                    except Exception:
+                        pass
 
-        if textbox is None:
-            return False, "Input box not found (button or textbox missing)"
+                # After clicking, search for the textbox again (now inside dialog or drawer)
+                textbox = await _find_first_visible(page, modal_box_selectors)
+                if not textbox:
+                    textbox = await _find_first_visible(page, inline_box_selectors)
 
-        # Click textbox, clear any prefilled Facebook placeholder, and type human-like
-        await textbox.click(delay=random.randint(60, 150))
-        await page.wait_for_timeout(random.randint(400, 800))
-        
-        # Try clearing via fill first if supported, else select all + backspace
-        try:
-            await textbox.fill("")
-            await page.wait_for_timeout(200)
-        except Exception:
-            select_all_key = "Meta+A" if sys.platform == "darwin" else "Control+A"
-            await page.keyboard.press(select_all_key)
-            await page.wait_for_timeout(200)
-            await page.keyboard.press("Backspace")
-            await page.wait_for_timeout(300)
+        if not textbox:
+            return False, "Input box not found (Message button or dialog missing)"
 
-        await textbox.press_sequentially(message_text, delay=random.randint(35, 75))
-        await page.wait_for_timeout(random.randint(1000, 2000))
+        # 3. Focus and clear existing placeholder text
+        await textbox.click(delay=random.randint(60, 120))
+        await page.wait_for_timeout(random.randint(300, 600))
 
-        # Look for Send button
+        select_all_key = "Meta+A" if sys.platform == "darwin" else "Control+A"
+        await page.keyboard.press(select_all_key)
+        await page.wait_for_timeout(150)
+        await page.keyboard.press("Backspace")
+        await page.wait_for_timeout(250)
+
+        # 4. Type the personalized message like a human
+        await page.keyboard.type(message_text, delay=random.randint(35, 75))
+        await page.wait_for_timeout(random.randint(800, 1500))
+
+        # 5. Look for Send button
         send_selectors = [
             'div[role="dialog"] div[aria-label="Send message"]',
             'div[role="dialog"] button[aria-label="Send message"]',
             'div[role="dialog"] div[aria-label="Send"]',
             'div[role="dialog"] button:has-text("Send")',
             'div[role="dialog"] div[role="button"]:has-text("Send")',
-            'div[aria-label="Send message to seller"]',
+            'div[role="main"] div[aria-label="Send message"]',
+            'div[role="main"] div[aria-label="Send message to seller"]',
+            'div[role="main"] button:has-text("Send")',
+            'div[role="main"] div[role="button"]:has-text("Send")',
             'div[aria-label="Send message"]',
-            'button[aria-label="Send message"]',
             'div[aria-label="Send Message"]',
             'div[aria-label="Send"]',
-            'button[aria-label="Send"]',
             'button:has-text("Send")',
-            'div[role="button"]:has-text("Send")',
-            'span:has-text("Send message")',
-            'span:has-text("Send")',
-            'div[aria-label="Press enter to send"]',
         ]
+        send_btn = await _find_first_visible(page, send_selectors)
+        if send_btn:
+            try:
+                await send_btn.click(force=True, delay=random.randint(60, 120))
+            except Exception:
+                await send_btn.evaluate("el => el.click()")
+        else:
+            # Fallback to pressing Enter inside the textbox
+            await page.keyboard.press("Enter")
 
-        sent = False
-        for s_sel in send_selectors:
-            send_btn = page.locator(s_sel).locator("visible=true").first
-            if await send_btn.count() > 0:
-                await send_btn.click(delay=random.randint(60, 150))
-                sent = True
-                break
-
-        if not sent:
-            await textbox.press("Enter", delay=random.randint(60, 150))
-
-        # Check for secondary confirmation button (e.g. Continue/Send)
+        # 6. Check for secondary confirmation popup (e.g. "Continue", "Send anyway")
         await page.wait_for_timeout(1500)
-        confirm_btn = page.locator('button:has-text("Send"), button:has-text("Continue")').locator("visible=true").first
-        if await confirm_btn.count() > 0:
-            await confirm_btn.click(delay=random.randint(60, 150))
+        confirm_selectors = [
+            'div[role="dialog"] button:has-text("Send")',
+            'div[role="dialog"] button:has-text("Continue")',
+            'button:has-text("Continue")',
+        ]
+        confirm_btn = await _find_first_visible(page, confirm_selectors)
+        if confirm_btn:
+            try:
+                await confirm_btn.click(delay=random.randint(60, 120))
+            except Exception:
+                pass
 
-        await page.wait_for_timeout(random.randint(3500, 5000))
+        await page.wait_for_timeout(random.randint(3000, 4500))
 
-        # Verify whether account is rate limited / blocked
+        # 7. Check if account is rate-limited / action-blocked
         post_text = await _page_text(page)
         if any(p in post_text for p in MESSAGING_BLOCK_PHRASES):
             return False, "MESSAGING_BLOCKED"
@@ -163,5 +208,4 @@ async def send_human_message(page, listing_url: str, message_text: str) -> tuple
 
 
 if __name__ == "__main__":
-    print("Outreach now runs inside the scraper: each Facebook account messages the deals it queues,")
-    print("within the daily limits in settings.py. Start it with: run.bat scraper  (or ./run.sh scraper)")
+    print("Outreach worker module ready. Integrated into continuous_scraper.py.")

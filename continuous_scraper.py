@@ -6,6 +6,13 @@ import sys
 import time
 import urllib.parse
 from collections import Counter, deque
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 from playwright.async_api import async_playwright
 
 import settings
@@ -13,7 +20,7 @@ import telegram_bot
 from fb_browser import launch_account, pause, human_scroll, account_problem, mark_account_problem, account_pause_reason
 from listing_filters import parse_card, detect_model, local_filter, condition_from_text, fingerprint, listed_ago_seconds
 from gemini_analyzer import triage_cards, analyze_deal, gemini_stats
-from market_comps import get_ebay_sold_comp, get_local_comp, market_value, base_slug, ebay_status
+from market_comps import get_local_comp, market_value, base_slug
 from outreach_worker import send_human_message, UNAVAILABLE_PHRASES
 from deal_pipeline import (supabase, check_schema, load_bot_config, load_local_config, CONFIG_CACHE_FILE,
                            load_seen, lookup_existing, save_listing, update_listing,
@@ -161,7 +168,7 @@ class AccountWorker:
             "normalized_model": x.get("slug") if reason in DEVICE_REASONS else None,
             "condition_grade": x.get("condition") or condition_from_text(c.title),
             "market_value": x.get("market") or None, "comp_source": x.get("source"),
-            "live_comp_price": x.get("ebay") or 0, "local_comp_price": x.get("local") or None,
+            "live_comp_price": 0, "local_comp_price": x.get("local") or None,
             "location": c.location, "fingerprint": x["fp"], "previous_price": x.get("price_drop_from") or c.previous_price,
             "found_by": self.id, "created_at": utc_now_iso(),
         })
@@ -210,13 +217,11 @@ class AccountWorker:
             if not reason and not x["price_drop_from"] and other and other != card["id"]:
                 reason = "repost"
             scan_fps.setdefault(x["fp"], card["id"])
-            x["ebay"], x["local"], x["local_n"], x["market"], x["source"] = 0.0, 0.0, 0, 0.0, "none"
+            x["local"], x["local_n"], x["market"], x["source"] = 0.0, 0, 0.0, "none"
             if not reason and x["slug"]:
                 others = [p for key in {x["slug"], base_slug(x["slug"])} for lid, p in page_prices.get(key, []) if lid != card["id"]]
                 x["local"], x["local_n"] = get_local_comp(supabase, x["slug"], others)
-                if x["local_n"] < 5:   # enough local samples make an eBay page load unnecessary
-                    x["ebay"] = await get_ebay_sold_comp(self.context, x["slug"])
-                x["market"], x["source"] = market_value(x["ebay"], x["local"], x["local_n"])
+                x["market"], x["source"] = market_value(x["local"], x["local_n"])
                 if x["market"] and c.price >= x["market"] * settings.AT_MARKET_RATIO:
                     reason = "at_market"
             if reason:
@@ -333,7 +338,7 @@ class AccountWorker:
         photo = (details.get("photos") or [card["img"]])[0]
         save_listing({
             "id": card["id"], "title": a.extracted_title or c.title, "normalized_model": slug, "price": c.price,
-            "previous_price": previous, "live_comp_price": x["ebay"], "local_comp_price": x["local"] or None,
+            "previous_price": previous, "live_comp_price": 0, "local_comp_price": x["local"] or None,
             "market_value": a.market_value or x["market"], "comp_source": x["source"], "url": card["url"],
             "image_url": photo, "status": status, "deal_tier": tier,
             "price_status": intraday["status"], "cheaper_deal_id": cheaper.get("id"), "cheaper_deal_url": cheaper.get("url"),
@@ -579,7 +584,6 @@ def build_daily_summary(shared: Shared) -> str:
         status = shared.account_status.get(acc["id"], "not running")
         lines.append(f"👤 {acc['id']}: {status} · {sent}/{settings.MAX_MESSAGES_PER_DAY} messages today")
     lines.append(f"🤖 {gemini_stats()}")
-    lines.append(f"📈 eBay comps: {ebay_status()}")
     return "\n".join(lines)
 
 

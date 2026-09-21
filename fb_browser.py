@@ -12,7 +12,8 @@ BLOCK_PHRASES = (
     "you're temporarily blocked", "you’re temporarily blocked", "temporarily restricted",
     "your account has been locked", "we suspended your account", "your account has been suspended",
     "confirm your identity", "we noticed unusual activity", "suspicious activity",
-    "you can't use this feature right now", "you’re restricted from",
+    "you can't use this feature right now", "you’re restricted from", "you can't buy or sell",
+    "you can’t buy or sell", "restore your access to marketplace",
 )
 LOGGED_OUT_PHRASES = ("log in to facebook", "log into facebook", "create new account")
 
@@ -84,6 +85,15 @@ async def human_scroll(page, steps: int = 1):
         await page.mouse.move(random.randint(200, 1100), random.randint(150, 600), steps=random.randint(4, 12))
         await page.mouse.wheel(0, random.randint(380, 880))
         await pause(0.9, 2.3)
+
+
+async def is_account_logged_in(context) -> bool:
+    """True if Facebook's c_user session cookie exists, proving the user is logged in."""
+    try:
+        cookies = await context.cookies("https://www.facebook.com")
+        return any(c.get("name") == "c_user" for c in cookies)
+    except Exception:
+        return False
 
 
 async def account_problem(page) -> str | None:

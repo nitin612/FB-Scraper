@@ -1,13 +1,20 @@
 """Supabase access, alerts and time helpers shared by the account workers in continuous_scraper.py."""
 import os
+import sys
+import subprocess
+import json
 import requests
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 from supabase import create_client, Client
-import sys
-import subprocess
-import json
 import settings
 from telegram_bot import send_telegram_alert, esc   # re-exported for continuous_scraper
 

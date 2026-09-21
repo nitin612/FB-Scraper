@@ -21,12 +21,14 @@ def _bool(name: str, default: bool) -> bool:
     return default if value is None else value.strip().lower() in ("1", "true", "yes", "on")
 
 
-# Facebook accounts - each has its own browser profile folder (log in once via setup_sessions.py).
-# Each account keeps the same window size forever so its browser fingerprint never changes.
-FB_ACCOUNTS = [
+# Facebook accounts - configure how many accounts are actively logged in (default 1).
+# When you log in Account_2 later, set NUM_ACTIVE_ACCOUNTS=2 in .env without changing code.
+NUM_ACTIVE_ACCOUNTS = _int("NUM_ACTIVE_ACCOUNTS", 1)
+ALL_FB_ACCOUNTS = [
     {"id": "Account_1", "session_dir": "./fb_session_acc1", "viewport": {"width": 1366, "height": 768}},
     {"id": "Account_2", "session_dir": "./fb_session_acc2", "viewport": {"width": 1440, "height": 900}},
 ]
+FB_ACCOUNTS = ALL_FB_ACCOUNTS[:max(1, min(NUM_ACTIVE_ACCOUNTS, len(ALL_FB_ACCOUNTS)))]
 
 TIMEZONE = os.getenv("BOT_TIMEZONE", "America/Toronto")
 LOCALE = "en-CA"
@@ -56,9 +58,9 @@ GEMINI_DAILY_CALLS_PER_KEY = _int("GEMINI_DAILY_CALLS_PER_KEY", 400)
 GEMINI_MIN_SECONDS_BETWEEN_CALLS = 4.0   # per key
 TRIAGE_BATCH_SIZE = 8
 # Lite models first (~1s, no thinking tokens); heavier models are only a fallback
-LITE_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite-preview"]
-FALLBACK_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-3.5-flash"]
-NO_THINKING_MODELS = {"gemini-2.5-flash", "gemini-3.5-flash"}   # accept thinking_budget=0, which halves their tokens
+LITE_MODELS = ["gemini-2.5-flash-lite", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
+FALLBACK_MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest", "gemini-3-flash-preview"]
+NO_THINKING_MODELS = {"gemini-3.5-flash", "gemini-3.6-flash"}   # accept thinking_budget=0, which halves their tokens
 MAX_PHOTOS_PER_DEAL = 3
 
 # Deal logic
@@ -67,8 +69,6 @@ PRICE_DROP_RATIO = 0.90           # look at a seen listing again only if its pri
 LOCAL_COMP_DAYS = 10
 LOCAL_COMP_MIN_SAMPLES = 3
 SEEN_LOOKBACK_DAYS = 30
-EBAY_COMPS = _bool("EBAY_COMPS", True)
-EBAY_CACHE_HOURS = 24
 
 # Hands-off running
 DAILY_SUMMARY_HOUR = _int("DAILY_SUMMARY_HOUR", 21)   # local hour for the daily Telegram summary
