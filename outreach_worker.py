@@ -35,22 +35,35 @@ async def send_human_message(page, listing_url: str, message_text: str) -> tuple
         if "you sent a message" in initial_text or "message sent" in initial_text:
             return True, "Already messaged"
 
-        # Possible message button selectors that trigger the message dialog
+        # Possible message button selectors that trigger the message dialog or open sidebar
         msg_button_selectors = [
             'div[aria-label="Message"]:not([aria-disabled="true"])',
             'button:has-text("Message")',
             'div[role="button"]:has-text("Message")',
             'div[aria-label="Send message to seller"]',
             'div[aria-label="Send seller a message"]',
+            'div[aria-label="Contact seller"]',
+            'div[role="button"]:has-text("Contact seller")',
+            'div[role="button"]:has-text("Send message")',
+            'span:has-text("Send message")',
+            'span:has-text("Message")',
         ]
 
-        # Textbox selectors on FB Marketplace
+        # Textbox selectors on FB Marketplace (inline panel, dialog modal, or Messenger dock)
         textbox_selectors = [
-            'textarea[aria-label*="Message"]',
+            'div[role="dialog"] div[contenteditable="true"][role="textbox"]',
+            'div[role="dialog"] textarea',
+            'div[contenteditable="true"][role="textbox"]',
+            'div[contenteditable="true"][aria-label*="Message" i]',
+            'div[contenteditable="true"][aria-label*="seller" i]',
+            'div[contenteditable="true"]',
+            'textarea[aria-label*="Message" i]',
+            'textarea[aria-label*="seller" i]',
+            'textarea[placeholder*="message" i]',
+            'textarea[placeholder*="available" i]',
             '[aria-label="Message to seller"]',
             '[aria-label="Send a message to this seller"]',
-            'div[contenteditable="true"][role="textbox"]',
-            'div[contenteditable="true"][aria-label*="Message"]',
+            '[aria-label="Send a message to this seller..."]',
             'div[role="textbox"]',
             'textarea',
         ]
@@ -80,21 +93,34 @@ async def send_human_message(page, listing_url: str, message_text: str) -> tuple
                     break
 
         if textbox is None:
-            return False, "Input box not found"
+            return False, "Input box not found (button or textbox missing)"
 
         # Click textbox, clear any prefilled Facebook placeholder, and type human-like
         await textbox.click(delay=random.randint(60, 150))
         await page.wait_for_timeout(random.randint(400, 800))
-        select_all_key = "Meta+A" if sys.platform == "darwin" else "Control+A"
-        await page.keyboard.press(select_all_key)
-        await page.wait_for_timeout(200)
-        await page.keyboard.press("Backspace")
-        await page.wait_for_timeout(300)
+        
+        # Try clearing via fill first if supported, else select all + backspace
+        try:
+            await textbox.fill("")
+            await page.wait_for_timeout(200)
+        except Exception:
+            select_all_key = "Meta+A" if sys.platform == "darwin" else "Control+A"
+            await page.keyboard.press(select_all_key)
+            await page.wait_for_timeout(200)
+            await page.keyboard.press("Backspace")
+            await page.wait_for_timeout(300)
+
         await textbox.press_sequentially(message_text, delay=random.randint(35, 75))
         await page.wait_for_timeout(random.randint(1000, 2000))
 
         # Look for Send button
         send_selectors = [
+            'div[role="dialog"] div[aria-label="Send message"]',
+            'div[role="dialog"] button[aria-label="Send message"]',
+            'div[role="dialog"] div[aria-label="Send"]',
+            'div[role="dialog"] button:has-text("Send")',
+            'div[role="dialog"] div[role="button"]:has-text("Send")',
+            'div[aria-label="Send message to seller"]',
             'div[aria-label="Send message"]',
             'button[aria-label="Send message"]',
             'div[aria-label="Send Message"]',
@@ -102,6 +128,9 @@ async def send_human_message(page, listing_url: str, message_text: str) -> tuple
             'button[aria-label="Send"]',
             'button:has-text("Send")',
             'div[role="button"]:has-text("Send")',
+            'span:has-text("Send message")',
+            'span:has-text("Send")',
+            'div[aria-label="Press enter to send"]',
         ]
 
         sent = False
