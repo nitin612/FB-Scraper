@@ -418,9 +418,17 @@ class AccountWorker:
                 update_listing(item["id"], {"status": "NEW", "outreach_log": f"🔴 Failed via {self.id}: {reason}"})
                 if approved:
                     telegram_bot.send_text(f"🔴 {self.id} couldn't message the seller of <b>{title}</b>: {esc(reason)}")
-                if reason == "MESSAGING_BLOCKED":
+                if "MESSAGING_BLOCKED" in reason:
                     self.messaging_paused_until = time.time() + 24 * 3600
                     send_telegram_alert(f"⚠️ <b>{self.id}</b>: Facebook is limiting its messages. Messaging from this account is paused for 24h.",
+                                        "https://www.facebook.com")
+                elif "ACCOUNT_BANNED" in reason:
+                    self.messaging_paused_until = time.time() + 24 * 3600
+                    send_telegram_alert(f"🚫 <b>{self.id}</b>: Account is restricted from Facebook Marketplace! Run 'python setup_sessions.py' to connect an active account.",
+                                        "https://www.facebook.com/marketplace")
+                elif "ACCOUNT_NOT_LOGGED_IN" in reason:
+                    self.messaging_paused_until = time.time() + 3600
+                    send_telegram_alert(f"⚠️ <b>{self.id}</b>: Browser session is logged out. Run 'python setup_sessions.py' to log in.",
                                         "https://www.facebook.com")
             await self.check_health()
         finally:
