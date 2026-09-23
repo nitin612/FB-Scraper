@@ -59,7 +59,13 @@ def browser_args() -> list[str]:
     args = ["--disable-blink-features=AutomationControlled"]
     if sys.platform.startswith("linux"):
         # Needed on cloud servers / Docker (see server_setup.sh); on Windows/macOS they only add a warning bar
-        args += ["--no-sandbox", "--disable-dev-shm-usage"]
+        args += [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+        ]
     return args
 
 
