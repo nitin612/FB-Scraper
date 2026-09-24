@@ -22,13 +22,16 @@ async def setup_account(account: dict):
         print("   Please log into your Facebook account inside that browser window.")
         input("\nPress Enter AFTER you have completely logged in and can see your feed or Marketplace: ")
 
-        # Verify authentication cookies
+        # Verify authentication cookies and export portable state
         logged_in = await is_account_logged_in(context)
+        state_file = f"state_{account['id'].lower().replace('account_', 'acc')}.json"
+        if logged_in:
+            await context.storage_state(path=state_file)
         await context.close()
 
     if logged_in:
         clear_account_problem(account["id"])
-        print(f"✅ {account['id']} successfully logged in and verified! Ready for scraping & auto-messaging.")
+        print(f"✅ {account['id']} successfully logged in and verified! Ready for scraping & auto-messaging (saved to {state_file}).")
     else:
         print(f"⚠️ WARNING: {account['id']} is NOT logged in. Facebook did not save a valid login session.")
         print("   Auto-messaging to sellers will fail until this account is logged in.")

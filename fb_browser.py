@@ -1,6 +1,7 @@
 """Browser launch and human-like actions shared by the scraper and setup_sessions.py."""
 import asyncio
 import json
+import os
 import random
 import sys
 from datetime import datetime, timedelta
@@ -69,15 +70,52 @@ def browser_args() -> list[str]:
     return args
 
 
+async def _state_file(account: dict) -> str | None:
+    """Returns path to portable storage_state JSON for this account, or None."""
+    for candidate in (
+        f"state_{account['id'].lower().replace('account_', 'acc')}.json",
+        f"state_{account['id'].lower()}.json",
+    ):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 async def launch_account(playwright, account: dict):
-    context = await playwright.chromium.launch_persistent_context(
-        user_data_dir=account["session_dir"],
-        headless=False,
-        args=browser_args(),
-        locale=settings.LOCALE,
-        timezone_id=settings.TIMEZONE,
-        viewport=account["viewport"],
-    )
+    if sys.platform.startswith("linux"):
+        # On Linux/cloud: use a fresh native profile + inject cookies from state JSON.
+        # Using fb_session_acc1 (Mac-imported) causes cookie conflicts — use a separate dir.
+        linux_dir = account["session_dir"].rstrip("/") + "_linux"
+        context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=linux_dir,
+            headless=False,
+            args=browser_args(),
+            locale=settings.LOCALE,
+            timezone_id=settings.TIMEZONE,
+            viewport=account["viewport"],
+        )
+        # Inject fresh decrypted cookies from the portable state JSON
+        state_file = await _state_file(account)
+        if state_file:
+            try:
+                with open(state_file, "r", encoding="utf-8") as f:
+                    state_data = json.load(f)
+                cookies = state_data.get("cookies", [])
+                if cookies:
+                    await context.add_cookies(cookies)
+                    print(f"[{account['id']}] 🔑 Loaded {len(cookies)} cookies from {state_file}")
+            except Exception as e:
+                print(f"[{account['id']}] ⚠️ Could not load cookies from {state_file}: {e}")
+    else:
+        # On macOS: native Keychain-encrypted persistent profile works as-is
+        context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=account["session_dir"],
+            headless=False,
+            args=browser_args(),
+            locale=settings.LOCALE,
+            timezone_id=settings.TIMEZONE,
+            viewport=account["viewport"],
+        )
     await Stealth().apply_stealth_async(context)
     return context
 
@@ -104,17 +142,52 @@ async def is_account_logged_in(context) -> bool:
 
 async def account_problem(page) -> str | None:
     """None if the account looks healthy, otherwise LOGGED_OUT / CHECKPOINT / BLOCKED."""
-    url = page.url.lower()
+    try:
+        url = page.url.lower()
+        title = await page.title()
+    except Exception:
+        url, title = "", ""
+
     if "/checkpoint" in url:
+        print(f"⚠️ [Account Check] CHECKPOINT detected. URL: {page.url} | Title: {title}")
+        try:
+            await page.screenshot(path="debug_checkpoint.png")
+            print("📸 Saved debug screenshot to 'debug_checkpoint.png'")
+        except Exception:
+            pass
         return "CHECKPOINT"
+
     if "/login" in url or "login.php" in url:
+        print(f"⚠️ [Account Check] LOGGED_OUT detected (redirected to login URL). URL: {page.url} | Title: {title}")
+        try:
+            await page.screenshot(path="debug_login.png")
+            print("📸 Saved debug screenshot to 'debug_login.png'")
+        except Exception:
+            pass
         return "LOGGED_OUT"
+
     try:
         text = (await page.locator("body").inner_text(timeout=4000))[:3000].lower()
     except Exception:
         return None
-    if any(p in text for p in BLOCK_PHRASES):
-        return "BLOCKED"
-    if sum(p in text for p in LOGGED_OUT_PHRASES) >= 2:
+
+    for phrase in BLOCK_PHRASES:
+        if phrase in text:
+            print(f"⚠️ [Account Check] BLOCKED phrase detected: '{phrase}'. URL: {page.url}")
+            try:
+                await page.screenshot(path="debug_blocked.png")
+            except Exception:
+                pass
+            return "BLOCKED"
+
+    matched_logged_out = [p for p in LOGGED_OUT_PHRASES if p in text]
+    if len(matched_logged_out) >= 2 and ("login" in url or "marketplace" not in url):
+        print(f"⚠️ [Account Check] LOGGED_OUT phrases detected: {matched_logged_out}. URL: {page.url}")
+        try:
+            await page.screenshot(path="debug_login.png")
+            print("📸 Saved debug screenshot to 'debug_login.png'")
+        except Exception:
+            pass
         return "LOGGED_OUT"
+
     return None
