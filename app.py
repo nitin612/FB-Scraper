@@ -15,6 +15,7 @@ import logging
 import settings
 from fb_browser import load_account_state
 from deal_pipeline import save_bot_config, load_bot_config
+from listing_filters import parse_search_targets, format_search_targets
 
 logging.getLogger("google.genai").setLevel(logging.ERROR)
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
@@ -569,7 +570,7 @@ with tab3:
                 
         # Configuration Card
         with st.container(border=True):
-            st.markdown("##### Global Surveillance Parameters")
+            st.markdown("##### Surveillance Target Matrix & Engine Parameters")
             auto_dm = st.toggle(
                 f"Auto-message Elite & Prime deals (Safety cap: max {settings.MAX_MESSAGES_PER_DAY}/day per account)",
                 value=bot_config.get('auto_message_enabled', False)
@@ -578,17 +579,145 @@ with tab3:
                 save_bot_config({"auto_message_enabled": auto_dm})
                 st.rerun()
 
-            with st.form("settings_form"):
-                city = st.text_input("Target City / Metro Area", value=bot_config['target_city'] if bot_config else "toronto")
-                kw = st.text_input("Search Keywords (comma-separated)", value=bot_config['keywords'] if bot_config else "iPhone")
-                p_col1, p_col2 = st.columns(2)
-                min_p = p_col1.number_input("Minimum Asking Price ($ CAD)", value=bot_config['min_price'] if bot_config else 50, step=25)
-                max_p = p_col2.number_input("Maximum Asking Price ($ CAD)", value=bot_config['max_price'] if bot_config else 2500, step=100)
-                
-                if st.form_submit_button("Deploy Changes to Engine", type="primary", icon=":material/bolt:"):
-                    save_bot_config({"target_city": city, "keywords": kw, "min_price": min_p, "max_price": max_p})
-                    st.success("Configuration deployed. Active scraper updated in real-time.")
-                    time.sleep(0.5)
+            city = st.text_input("Target City / Metro Area", value=bot_config.get('target_city', 'surrey') if bot_config else "surrey")
+
+            # Load existing target items into session state if not already loaded
+            if "search_target_rows" not in st.session_state:
+                parsed_init = parse_search_targets(
+                    bot_config.get('keywords', 'iPhone') if bot_config else 'iPhone',
+                    default_min=bot_config.get('min_price', 25) if bot_config else 25,
+                    default_max=bot_config.get('max_price', 2100) if bot_config else 2100
+                )
+                st.session_state.search_target_rows = [
+                    {
+                        "Device / Product": t["query"],
+                        "Min Price ($ CAD)": int(t["min_price"]),
+                        "Max Price ($ CAD)": int(t["max_price"])
+                    }
+                    for t in parsed_init
+                ] if parsed_init else [{"Device / Product": "iPhone", "Min Price ($ CAD)": 50, "Max Price ($ CAD)": 2000}]
+
+            # Normalize rows to ensure exactly 3 keys
+            clean_target_list = []
+            for r in st.session_state.search_target_rows:
+                q = r.get("Device / Product") or r.get("query") or ""
+                raw_min = r.get("Min Price ($ CAD)") if r.get("Min Price ($ CAD)") is not None else r.get("min_price", 25)
+                raw_max = r.get("Max Price ($ CAD)") if r.get("Max Price ($ CAD)") is not None else r.get("max_price", 2100)
+                try:
+                    p_min = int(float(raw_min))
+                except Exception:
+                    p_min = 25
+                try:
+                    p_max = int(float(raw_max))
+                except Exception:
+                    p_max = 2100
+                if str(q).strip():
+                    clean_target_list.append({
+                        "Device / Product": str(q).strip(),
+                        "Min Price ($ CAD)": min(p_min, p_max),
+                        "Max Price ($ CAD)": max(p_min, p_max)
+                    })
+            st.session_state.search_target_rows = clean_target_list
+
+            # Active Target Search Table with explicit Delete button on each row
+            st.markdown("###### Active Target Search Table")
+            with st.container(border=True):
+                # Header row
+                h1, h2, h3, h4 = st.columns([4.5, 2.5, 2.5, 1.2])
+                h1.caption("**Device / Product to Search**")
+                h2.caption("**Min Price ($ CAD)**")
+                h3.caption("**Max Price ($ CAD)**")
+                h4.caption("**Action**")
+
+                row_to_delete = None
+                for idx, row in enumerate(st.session_state.search_target_rows):
+                    r1, r2, r3, r4 = st.columns([4.5, 2.5, 2.5, 1.2], vertical_alignment="center")
+                    with r1:
+                        row["Device / Product"] = st.text_input(
+                            "Device Name",
+                            value=row.get("Device / Product", ""),
+                            key=f"dev_name_{idx}",
+                            label_visibility="collapsed",
+                            placeholder="e.g. iPhone 6, Blackberry..."
+                        )
+                    with r2:
+                        row["Min Price ($ CAD)"] = st.number_input(
+                            "Min Price",
+                            value=int(row.get("Min Price ($ CAD)", 25)),
+                            step=25,
+                            min_value=0,
+                            key=f"dev_min_{idx}",
+                            label_visibility="collapsed"
+                        )
+                    with r3:
+                        row["Max Price ($ CAD)"] = st.number_input(
+                            "Max Price",
+                            value=int(row.get("Max Price ($ CAD)", 2100)),
+                            step=50,
+                            min_value=1,
+                            key=f"dev_max_{idx}",
+                            label_visibility="collapsed"
+                        )
+                    with r4:
+                        if st.button("🗑️", key=f"del_row_{idx}", help=f"Delete {row.get('Device / Product', 'this row')}", width="stretch"):
+                            row_to_delete = idx
+
+                if row_to_delete is not None:
+                    st.session_state.search_target_rows.pop(row_to_delete)
+                    st.rerun()
+
+                st.markdown("")
+                if st.button("➕ Add Another Device / Product", icon=":material/add:", type="secondary"):
+                    st.session_state.search_target_rows.append({
+                        "Device / Product": "",
+                        "Min Price ($ CAD)": 25,
+                        "Max Price ($ CAD)": 150
+                    })
+                    st.rerun()
+
+            st.divider()
+
+            col_deploy, col_reset = st.columns([3, 1])
+            with col_deploy:
+                if st.button("Deploy Changes to Engine", type="primary", icon=":material/bolt:", width="stretch"):
+                    cleaned_rows = []
+                    for r in st.session_state.search_target_rows:
+                        dev = str(r.get("Device / Product", "")).strip()
+                        if dev:
+                            try:
+                                p_min = int(float(r.get("Min Price ($ CAD)", 25)))
+                            except Exception:
+                                p_min = 25
+                            try:
+                                p_max = int(float(r.get("Max Price ($ CAD)", 2100)))
+                            except Exception:
+                                p_max = 2100
+                            cleaned_rows.append({
+                                "Device / Product": dev,
+                                "Min Price ($ CAD)": min(p_min, p_max),
+                                "Max Price ($ CAD)": max(p_min, p_max)
+                            })
+                    if not cleaned_rows:
+                        st.error("Please add at least one device or product target.")
+                    else:
+                        st.session_state.search_target_rows = cleaned_rows
+                        serialized_kw = ", ".join([f"{r['Device / Product']}: {r['Min Price ($ CAD)']}-{r['Max Price ($ CAD)']}" for r in cleaned_rows])
+                        overall_min = min(r['Min Price ($ CAD)'] for r in cleaned_rows)
+                        overall_max = max(r['Max Price ($ CAD)'] for r in cleaned_rows)
+                        save_bot_config({
+                            "target_city": city.strip().lower(),
+                            "keywords": serialized_kw,
+                            "min_price": overall_min,
+                            "max_price": overall_max
+                        })
+                        st.success(f"✅ Successfully deployed {len(cleaned_rows)} targets to engine! Scraper is updated.")
+                        time.sleep(0.5)
+                        st.rerun()
+
+            with col_reset:
+                if st.button("Reload from Database", icon=":material/refresh:", width="stretch"):
+                    if "search_target_rows" in st.session_state:
+                        del st.session_state.search_target_rows
                     st.rerun()
 
 # 30-second background autorefresh at the bottom of the page

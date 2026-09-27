@@ -18,7 +18,7 @@ from playwright.async_api import async_playwright
 import settings
 import telegram_bot
 from fb_browser import launch_account, pause, human_scroll, account_problem, mark_account_problem, account_pause_reason
-from listing_filters import parse_card, detect_model, local_filter, condition_from_text, fingerprint, listed_ago_seconds
+from listing_filters import parse_card, detect_model, local_filter, condition_from_text, fingerprint, listed_ago_seconds, parse_search_targets
 from gemini_analyzer import triage_cards, analyze_deal, gemini_stats
 from market_comps import get_local_comp, market_value, base_slug
 from outreach_worker import send_human_message, UNAVAILABLE_PHRASES
@@ -50,13 +50,32 @@ class Shared:
         self.account_status: dict[str, str] = {}
         self._keyword_index = 0
 
+    def get_targets(self) -> list[dict]:
+        if not self.config:
+            return []
+        def_min = float(self.config.get("min_price", 50))
+        def_max = float(self.config.get("max_price", 2500))
+        return parse_search_targets(self.config.get("keywords", ""), def_min, def_max)
+
+    def next_target(self) -> dict | None:
+        targets = self.get_targets()
+        if not targets:
+            return None
+        target = targets[self._keyword_index % len(targets)]
+        self._keyword_index += 1
+        return target
+
+    def next_keyword(self) -> str | None:
+        target = self.next_target()
+        return target["query"] if target else None
+
     def update_config(self, new_cfg: dict | None) -> bool:
         if not new_cfg:
             return False
         old_cfg = self.config or {}
 
-        old_kw = [k.strip().lower() for k in old_cfg.get("keywords", "").split(",") if k.strip()]
-        new_kw = [k.strip().lower() for k in new_cfg.get("keywords", "").split(",") if k.strip()]
+        old_kw = (old_cfg.get("keywords") or "").strip()
+        new_kw = (new_cfg.get("keywords") or "").strip()
 
         kw_changed = old_kw != new_kw
         city_changed = str(old_cfg.get("target_city", "")).strip().lower() != str(new_cfg.get("target_city", "")).strip().lower()
@@ -69,32 +88,26 @@ class Shared:
         if kw_changed or city_changed or price_changed or active_changed or auto_changed:
             self.config_version += 1
             changes = []
-            raw_new_kw = [k.strip() for k in new_cfg.get("keywords", "").split(",") if k.strip()]
-            if kw_changed:
-                self._keyword_index = 0   # restart rotation immediately with the first new keyword
-                changes.append(f"Keywords -> {raw_new_kw}")
+            targets = self.get_targets()
+            if kw_changed or price_changed:
+                self._keyword_index = 0   # restart rotation immediately with the first new target
+                target_summaries = [f"{t['query']} (CAD ${int(t['min_price'])}-${int(t['max_price'])})" for t in targets]
+                changes.append(f"Targets -> {target_summaries}")
             if city_changed:
                 changes.append(f"City -> {new_cfg.get('target_city')}")
             if price_changed:
-                changes.append(f"Price -> ${new_cfg.get('min_price', 0):,} - ${new_cfg.get('max_price', 0):,}")
+                changes.append(f"Default Price -> ${new_cfg.get('min_price', 0):,} - ${new_cfg.get('max_price', 0):,}")
             if active_changed:
                 changes.append(f"Active -> {new_cfg.get('is_active')}")
             if auto_changed:
                 changes.append(f"Auto-message -> {new_cfg.get('auto_message_enabled')}")
 
             print(f"\n🔄 Live configuration updated: {', '.join(changes)}")
-            if kw_changed and raw_new_kw:
-                print(f"   ⚡ Scraper will immediately switch to: '{raw_new_kw[0]}'")
+            if (kw_changed or price_changed) and targets:
+                t0 = targets[0]
+                print(f"   ⚡ Scraper will immediately switch to: '{t0['query']}' (CAD ${int(t0['min_price'])}-${int(t0['max_price'])})")
             return True
         return False
-
-    def next_keyword(self) -> str | None:
-        keywords = [k.strip() for k in (self.config or {}).get("keywords", "").split(",") if k.strip()]
-        if not keywords:
-            return None
-        keyword = keywords[self._keyword_index % len(keywords)]
-        self._keyword_index += 1
-        return keyword
 
 
 class AccountWorker:
@@ -139,15 +152,19 @@ class AccountWorker:
         found, order, seen_streak = {}, [], 0
         for _ in range(settings.MAX_SCROLLS_PER_SEARCH + 1):
             for link in await self.page.locator("a[href*='/marketplace/item/']").all():
-                m = re.search(r"/marketplace/item/(\d+)", await link.get_attribute("href") or "")
-                if not m or m.group(1) in found:
-                    continue
-                lid = m.group(1)
-                img = link.locator("img").first
-                found[lid] = {"id": lid, "url": f"https://www.facebook.com/marketplace/item/{lid}/",
-                              "text": await link.inner_text(), "img": await img.get_attribute("src") if await img.count() else None}
-                order.append(lid)
-                seen_streak = seen_streak + 1 if lid in self.shared.seen else 0
+                try:
+                    m = re.search(r"/marketplace/item/(\d+)", await link.get_attribute("href", timeout=3000) or "")
+                    if not m or m.group(1) in found:
+                        continue
+                    lid = m.group(1)
+                    img = link.locator("img").first
+                    found[lid] = {"id": lid, "url": f"https://www.facebook.com/marketplace/item/{lid}/",
+                                  "text": await link.inner_text(timeout=3000),
+                                  "img": await img.get_attribute("src", timeout=3000) if await img.count() else None}
+                    order.append(lid)
+                    seen_streak = seen_streak + 1 if lid in self.shared.seen else 0
+                except Exception:
+                    continue  # skip individual card if it stalls
             # Newest first: a run of already-seen listings means we have caught up - no need to scroll further
             if len(order) >= settings.MAX_CARDS_PER_SEARCH or seen_streak >= settings.CAUGHT_UP_AFTER_SEEN:
                 break
@@ -174,12 +191,20 @@ class AccountWorker:
         })
         self.remember(card["id"], c.price, "TRASH", x["fp"])
 
-    async def scan(self, keyword: str):
+    async def scan(self, target: dict | str):
         cfg = self.shared.config
-        min_p, max_p = cfg["min_price"], cfg["max_price"]
+        if isinstance(target, dict):
+            keyword = target["query"]
+            min_p = int(target["min_price"])
+            max_p = int(target["max_price"])
+        else:
+            keyword = str(target)
+            min_p = int(cfg.get("min_price", 50))
+            max_p = int(cfg.get("max_price", 2500))
+
         url = (f"https://www.facebook.com/marketplace/{cfg['target_city']}/search?sortBy=creation_time_descend"
                f"&query={urllib.parse.quote(keyword)}&minPrice={min_p}&maxPrice={max_p}")
-        self.log(f"🔍 Searching '{keyword}'...")
+        self.log(f"🔍 Searching '{keyword}' (CAD ${min_p:,} - ${max_p:,})...")
         await self.page.goto(url, wait_until="domcontentloaded")
         self.search_times.append(time.time())
         await pause(3.5, 7)
@@ -258,7 +283,7 @@ class AccountWorker:
                 x["slug"] = x["slug"] or clean_slug(r.normalized_model)
                 x["condition"] = r.condition_hint if r.condition_hint in GRADES else condition_from_text(x["parsed"].title)
                 if not x["market"]:
-                    x["market"], x["source"] = market_value(0, 0, 0, r.market_value_cad)
+                    x["market"], x["source"] = market_value(0, 0, r.market_value_cad)
                 # Lite models don't know phones released after their training (e.g. iPhone 17 / Air) - trust the regex for those
                 if not r.is_target_device and not locally_known:
                     self.save_trash(x, "not_a_phone")
@@ -476,18 +501,19 @@ class AccountWorker:
                     self.last_config_version = self.shared.config_version
                     searches = 0
 
-                keyword = self.shared.next_keyword()
-                if not keyword:
+                target = self.shared.next_target()
+                if not target:
                     await self.rest(10.0)
                     continue
                 try:
-                    await self.scan(keyword)
+                    await self.scan(target)
                     if not self.problem:
                         await self.maybe_send_outreach()
                     self.errors_in_row = 0
                 except Exception as e:
                     self.errors_in_row += 1
-                    self.log(f"⚠️ Scan error: {str(e)[:120]}")
+                    import traceback
+                    self.log(f"⚠️ Scan error: {str(e)[:120]}\n{traceback.format_exc()[-800:]}")
                     if self.errors_in_row >= 3:
                         raise RuntimeError("browser keeps failing") from e
                     await pause(20, 45)

@@ -139,3 +139,116 @@ def fingerprint(card: Card) -> str:
     """Same title + price + area = the same item reposted under a new listing id."""
     title = re.sub(r"[^a-z0-9]+", " ", card.title.lower()).strip()
     return f"{title}|{int(card.price)}|{card.location.lower()}"
+
+
+def parse_target_item(raw_item: str, default_min: float = 50, default_max: float = 2500) -> dict | None:
+    """Parses a single search target entry into its query name and custom or default price bounds.
+    Works generically for ANY search term or product name.
+    Supported format examples:
+      - '<keyword>: <min>-<max>' (e.g. 'keyword: 50-200', 'keyword: $50 - $200', 'keyword: 50 to 200')
+      - '<keyword> [<min>-<max>]' or '<keyword> (<min>-<max>)'
+      - '<keyword> = <min>-<max>'
+      - '<keyword>: -<max>' or '<keyword>: <=<max>' (max price only)
+      - '<keyword>: <min>+' or '<keyword>: >=<min>' (min price only)
+      - '<keyword>' (standard item inheriting the global default min/max)
+    """
+    raw_item = (raw_item or "").strip()
+    if not raw_item:
+        return None
+
+    # Pattern 1: Bracketed at the end: ... (25-150) or ... [25-150] or ... ($25 - $150)
+    bracket_match = re.search(r"[\(\[]\s*\$?\s*(\d+(?:\.\d+)?)\s*(?:-|to|:)\s*\$?\s*(\d+(?:\.\d+)?)\s*[\)\]]$", raw_item, re.IGNORECASE)
+    if bracket_match:
+        query = raw_item[:bracket_match.start()].strip()
+        min_p = float(bracket_match.group(1))
+        max_p = float(bracket_match.group(2))
+        return {
+            "query": query,
+            "min_price": min(min_p, max_p),
+            "max_price": max(min_p, max_p),
+            "has_custom_range": True,
+            "raw": raw_item,
+        }
+
+    # Pattern 2: Separator (: or = or @): query: 25-150 or query: $25 - $150 or query: 25 to 150 or query: 25:150
+    sep_match = re.search(r"[:=@]\s*(.+)$", raw_item)
+    if sep_match:
+        query_part = raw_item[:sep_match.start()].strip()
+        range_part = sep_match.group(1).strip()
+
+        # 1) "25-150" or "$25 - $150" or "25 to 150" or "25:150"
+        m_range = re.search(r"^\$?\s*(\d+(?:\.\d+)?)\s*(?:-|to|:)\s*\$?\s*(\d+(?:\.\d+)?)$", range_part, re.IGNORECASE)
+        if m_range:
+            min_p = float(m_range.group(1))
+            max_p = float(m_range.group(2))
+            return {
+                "query": query_part,
+                "min_price": min(min_p, max_p),
+                "max_price": max(min_p, max_p),
+                "has_custom_range": True,
+                "raw": raw_item,
+            }
+
+        # 2) "-150" or "<=150" or "<150" or "max 150" (only max)
+        m_max = re.search(r"^(?:-|<=?|max\s*)\s*\$?\s*(\d+(?:\.\d+)?)$", range_part, re.IGNORECASE)
+        if m_max:
+            max_p = float(m_max.group(1))
+            return {
+                "query": query_part,
+                "min_price": float(default_min),
+                "max_price": max_p,
+                "has_custom_range": True,
+                "raw": raw_item,
+            }
+
+        # 3) "800+" or ">=800" or ">800" or "min 800" or "800-" (only min)
+        m_min = re.search(r"^(?:>=?|>|min\s*)?\s*\$?\s*(\d+(?:\.\d+)?)\s*(?:\+|>=?)?$", range_part, re.IGNORECASE)
+        if m_min:
+            min_p = float(m_min.group(1))
+            return {
+                "query": query_part,
+                "min_price": min_p,
+                "max_price": float(default_max),
+                "has_custom_range": True,
+                "raw": raw_item,
+            }
+
+    # Pattern 3: Fallback standard keyword without custom price range
+    return {
+        "query": raw_item,
+        "min_price": float(default_min),
+        "max_price": float(default_max),
+        "has_custom_range": False,
+        "raw": raw_item,
+    }
+
+
+def parse_search_targets(raw_keywords: str, default_min: float = 50, default_max: float = 2500) -> list[dict]:
+    """Parses a comma-separated search target string into a list of structured target dicts."""
+    if not raw_keywords:
+        return []
+    targets = []
+    items = [item.strip() for item in raw_keywords.split(",") if item.strip()]
+    for item in items:
+        parsed = parse_target_item(item, default_min, default_max)
+        if parsed and parsed["query"]:
+            targets.append(parsed)
+    return targets
+
+
+def format_search_targets(targets: list[dict], default_min: float = 50, default_max: float = 2500) -> str:
+    """Formats a list of structured target dicts back into a comma-separated string."""
+    formatted = []
+    for t in targets:
+        q = t.get("query", "").strip()
+        if not q:
+            continue
+        min_p = float(t.get("min_price", default_min))
+        max_p = float(t.get("max_price", default_max))
+        has_custom = t.get("has_custom_range", False) or (min_p != float(default_min) or max_p != float(default_max))
+        if has_custom:
+            formatted.append(f"{q}: {int(min_p)}-{int(max_p)}")
+        else:
+            formatted.append(q)
+    return ", ".join(formatted)
+
