@@ -48,17 +48,19 @@ def account_pause_reason(account_id: str) -> str | None:
     """Why this account must not be started, or None. Logged-out / checkpoint accounts wait for setup;
     a temporary block gets one retry after BLOCKED_RETRY_HOURS."""
     entry = load_account_state().get(account_id)
+    if not entry:
+        return None
     import dateutil.parser
     try:
-        since = dateutil.parser.isoparse(entry["since"])
+        since = dateutil.parser.isoparse(entry.get("since", ""))
     except Exception:
         try:
-            since = datetime.fromisoformat(entry["since"])
+            since = datetime.fromisoformat(entry.get("since", ""))
         except Exception:
             since = datetime.now()
-    if entry["problem"] == "BLOCKED" and datetime.now() - since > timedelta(hours=settings.BLOCKED_RETRY_HOURS):
+    if entry.get("problem") == "BLOCKED" and datetime.now() - since > timedelta(hours=settings.BLOCKED_RETRY_HOURS):
         return None
-    return f"{entry['problem']} since {since:%b %d %H:%M}"
+    return f"{entry.get('problem')} since {since:%b %d %H:%M}"
 
 
 def browser_args() -> list[str]:
