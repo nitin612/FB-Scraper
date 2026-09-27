@@ -218,7 +218,17 @@ def messages_sent_today(account_id: str) -> tuple[int, float]:
     """(messages sent today by this account, unix time of the latest one) - survives restarts."""
     rows = (supabase.table("listings").select("contacted_at").eq("contacted_by", account_id)
             .gte("contacted_at", local_midnight_utc_iso()).execute().data)
-    stamps = [datetime.fromisoformat(r["contacted_at"]).timestamp() for r in rows if r.get("contacted_at")]
+    stamps = []
+    import dateutil.parser
+    for r in rows:
+        if r.get("contacted_at"):
+            try:
+                stamps.append(dateutil.parser.isoparse(r["contacted_at"]).timestamp())
+            except Exception:
+                try:
+                    stamps.append(datetime.fromisoformat(r["contacted_at"].replace("Z", "+00:00")).timestamp())
+                except Exception:
+                    pass
     return len(stamps), max(stamps, default=0.0)
 
 
