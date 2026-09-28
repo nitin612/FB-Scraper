@@ -11,6 +11,9 @@ UNAVAILABLE_PHRASES = (
     "listing is no longer available",
     "this item has been sold",
     "item is no longer available",
+    "sold ·",           # Facebook heading: "Sold · iPhone 16 Pro ..."
+    "marked as sold",
+    "item sold",
 )
 
 MESSAGING_BLOCK_PHRASES = (
@@ -75,7 +78,18 @@ async def send_human_message(page, listing_url: str, message_text: str) -> tuple
 
         # 2. Check if listing is unavailable / sold
         if any(p in initial_text for p in UNAVAILABLE_PHRASES):
-            return False, "Listing no longer available"
+            return False, "Listing no longer available (sold/removed)"
+
+        # Also check h1/heading DOM text for "Sold" badge (Facebook shows "Sold · <title>")
+        try:
+            for heading_sel in ["h1", "[aria-level='1']", "[data-testid='marketplace_pdp_title']"]:
+                h = page.locator(heading_sel).first
+                if await h.count() > 0:
+                    h_text = (await h.inner_text(timeout=2000)).lower()
+                    if h_text.startswith("sold"):
+                        return False, "Listing no longer available (sold/removed)"
+        except Exception:
+            pass
 
         # 3. Check if seller was already messaged
         if "you sent a message" in initial_text or "message sent" in initial_text:
@@ -117,21 +131,33 @@ async def send_human_message(page, listing_url: str, message_text: str) -> tuple
         # 6. If no textbox is open, locate and click the primary "Message" button
         if not textbox:
             msg_button_selectors = [
+                # Exact aria-label matches (most reliable)
                 'div[role="main"] div[aria-label="Message"][role="button"]',
                 'div[role="main"] div[aria-label*="Message" i][role="button"]',
                 'div[role="main"] div[aria-label="Send message to seller"]',
                 'div[role="main"] div[aria-label="Send seller a message"]',
                 'div[role="main"] div[aria-label="Contact seller"]',
+                'div[role="main"] div[aria-label*="Contact" i][role="button"]',
+                # Button element variants
+                'div[role="main"] button[aria-label*="Message" i]',
+                'div[role="main"] button[aria-label*="Contact" i]',
                 'div[role="main"] button:has-text("Message")',
                 'div[role="main"] button:has-text("Contact seller")',
+                'div[role="main"] button:has-text("Chat")',
+                # div[role=button] text variants
                 'div[role="main"] div[role="button"]:has-text("Message")',
                 'div[role="main"] div[role="button"]:has-text("Contact seller")',
+                'div[role="main"] div[role="button"]:has-text("Chat")',
+                # span-wrapped buttons (FB sometimes wraps)
+                'div[role="main"] span:has-text("Message") >> xpath=ancestor::div[@role="button"][1]',
+                # Global fallbacks
                 'div[aria-label="Message"][role="button"]',
                 'div[aria-label*="Message" i][role="button"]',
                 'div[aria-label="Send message to seller"]',
                 'div[aria-label="Contact seller"]',
                 'button:has-text("Message")',
                 'div[role="button"]:has-text("Message")',
+                'a[role="button"]:has-text("Message")',
             ]
             btn = await _find_first_visible(page, msg_button_selectors)
             if btn:
