@@ -57,13 +57,21 @@ async def send_human_message(page, listing_url: str, message_text: str) -> tuple
     and confirms actual delivery before reporting success.
     """
     try:
-        await page.goto(listing_url, wait_until="domcontentloaded")
+        await page.goto(listing_url, wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(random.randint(3500, 5000))
 
         # 1. Pre-flight check: Account Marketplace ban check
         initial_text = await _page_text(page)
         if "you can't buy or sell" in initial_text or "you can’t buy or sell" in initial_text or "restore your access to marketplace" in initial_text:
             return False, "ACCOUNT_BANNED: This Facebook account is restricted from Marketplace ('You can't buy or sell items on Facebook'). Please log in with an active, unbanned account."
+
+        # Universal Login Check: detect password field or login form (any language)
+        try:
+            pw_input = page.locator('input[type="password"]').first
+            if await pw_input.count() > 0 and await pw_input.is_visible():
+                return False, "ACCOUNT_NOT_LOGGED_IN: Facebook session is expired or logged out (password prompt visible). Please re-login via fresh_login.py."
+        except Exception:
+            pass
 
         # 2. Check if listing is unavailable / sold
         if any(p in initial_text for p in UNAVAILABLE_PHRASES):
@@ -141,6 +149,9 @@ async def send_human_message(page, listing_url: str, message_text: str) -> tuple
                 dialog = page.locator('div[role="dialog"]').first
                 if await dialog.count() > 0 and await dialog.is_visible():
                     try:
+                        pw = dialog.locator('input[type="password"]').first
+                        if await pw.count() > 0 and await pw.is_visible():
+                            return False, "ACCOUNT_NOT_LOGGED_IN: Facebook prompted for password/login. Please re-login via fresh_login.py."
                         d_text = (await dialog.inner_text(timeout=2000)).lower()
                         if "log in to facebook" in d_text or "create new account" in d_text:
                             return False, "ACCOUNT_NOT_LOGGED_IN: Facebook prompted for login. Run 'python setup_sessions.py' to log in."

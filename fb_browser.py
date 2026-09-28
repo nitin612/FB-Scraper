@@ -174,6 +174,19 @@ async def account_problem(page) -> str | None:
         return "LOGGED_OUT"
 
     try:
+        pw_input = page.locator('input[type="password"]').first
+        if await pw_input.count() > 0 and await pw_input.is_visible():
+            print(f"⚠️ [Account Check] LOGGED_OUT detected (password input visible). URL: {page.url} | Title: {title}")
+            try:
+                await page.screenshot(path="debug_login.png")
+                print("📸 Saved debug screenshot to 'debug_login.png'")
+            except Exception:
+                pass
+            return "LOGGED_OUT"
+    except Exception:
+        pass
+
+    try:
         text = (await page.locator("body").inner_text(timeout=4000))[:3000].lower()
     except Exception:
         return None
