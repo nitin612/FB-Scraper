@@ -205,7 +205,7 @@ class AccountWorker:
         url = (f"https://www.facebook.com/marketplace/{cfg['target_city']}/search?sortBy=creation_time_descend"
                f"&query={urllib.parse.quote(keyword)}&minPrice={min_p}&maxPrice={max_p}")
         self.log(f"🔍 Searching '{keyword}' (CAD ${min_p:,} - ${max_p:,})...")
-        await self.page.goto(url, wait_until="domcontentloaded")
+        await self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
         self.search_times.append(time.time())
         await pause(3.5, 7)
         if await self.check_health():
@@ -513,10 +513,15 @@ class AccountWorker:
                 except Exception as e:
                     self.errors_in_row += 1
                     import traceback
-                    self.log(f"⚠️ Scan error: {str(e)[:120]}\n{traceback.format_exc()[-800:]}")
-                    if self.errors_in_row >= 3:
+                    err_str = str(e)[:120]
+                    self.log(f"⚠️ Scan error ({self.errors_in_row}/5): {err_str}\n{traceback.format_exc()[-600:]}")
+                    if self.errors_in_row >= 5:
                         raise RuntimeError("browser keeps failing") from e
-                    await pause(20, 45)
+                    # Longer pause for timeouts - gives FB rate-limiting time to clear
+                    if "timeout" in err_str.lower() or "Timeout" in err_str:
+                        await pause(45, 90)
+                    else:
+                        await pause(20, 45)
                 searches += 1
                 if searches >= next_break:
                     minutes = random.uniform(*settings.LONG_BREAK_MINUTES)
